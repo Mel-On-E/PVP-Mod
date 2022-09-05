@@ -1,3 +1,6 @@
+dofile( "$SURVIVAL_DATA/Scripts/game/survival_projectiles.lua" )
+dofile( "$SURVIVAL_DATA/Scripts/util.lua" )
+
 ---@class PVP : ToolClass
 
 PVP = class()
@@ -9,6 +12,7 @@ local maxHP = 100
 local respawnTime = 10
 
 local showHitboxes = true --DEBUG
+local survivalMode = false
 
 function PVP:server_onCreate()
     self:sv_init()
@@ -31,6 +35,10 @@ end
 function PVP:server_onFixedUpdate()
     if PVP.instance ~= self then return end
 
+    if getGamemode() == "survival" then
+        survivalMode = true
+    end
+
     local function create_hitbox(player)
         self.sv.playerStats[player.id] = {hp = maxHP}
 
@@ -38,7 +46,7 @@ function PVP:server_onFixedUpdate()
 
         local hitbox = {}
         hitbox.player = player
-        hitbox.trigger = sm.areaTrigger.createBox(player.character.worldPosition, hitboxSize/32)
+        hitbox.trigger = sm.areaTrigger.createBox(hitboxSize/2, player.character.worldPosition)
         hitbox.trigger:bindOnProjectile("hitbox_onProjectile", self)
         return hitbox
     end
@@ -47,7 +55,7 @@ function PVP:server_onFixedUpdate()
 
     update_hitbox_positons(self.sv.hitboxes)
 
-    if sm.game.getCurrentTick() % 40 == 0 then
+    if not survivalMode and sm.game.getCurrentTick() % 40 == 0 then
         for _, player in pairs(sm.player.getAllPlayers()) do
             self:sv_updateHP(player, healthRegenPerSecond)
         end
@@ -60,10 +68,6 @@ function PVP:server_onFixedUpdate()
                 yaw = 0,
                 pitch = 0
             }
-
-            if g_spawns then
-                spawnParams = g_spawns[respawn.player.id]
-            end
 
             local newChar = sm.character.createCharacter( respawn.player, respawn.player:getCharacter():getWorld(), spawnParams.pos, spawnParams.yaw, spawnParams.pitch )
             respawn.player:setCharacter(newChar)
@@ -110,28 +114,45 @@ function update_hitbox_positons(hitboxes)
 end
 
 function PVP:sv_updateHP(player, change, attacker)
-    local hp = self.sv.playerStats[player.id].hp
-    if hp and hp > 0 then
-        self.sv.playerStats[player.id].hp = math.min(math.max(hp + change, 0), maxHP)
-        self.network:sendToClient(player, "cl_updateHealthBar", self.sv.playerStats[player.id].hp)
+    if survivalMode then --SurvivalGame
+        if change > 0 then
+            sm.event.sendToPlayer(player, "sv_restoreHealth", change)
+        else
+            sm.event.sendToPlayer(player, "sv_takeDamage", -change)
+        end
 
-        if self.sv.playerStats[player.id].hp == 0 then
-            if type( attacker ) == "Player" then
-                self.network:sendToClients( "cl_n_showMessage", "#ff0000" .. player.name .. "#ffffff was killed by #00ffff" .. attacker.name )
-            else
-                self.network:sendToClients( "cl_n_showMessage", "#ff0000".. player.name .. " #ffffffdied " )
+    else --Custom Health HUD
+        local hp = self.sv.playerStats[player.id].hp
+        if hp and hp > 0 then
+            self.sv.playerStats[player.id].hp = math.min(math.max(hp + change, 0), maxHP)
+            self.network:sendToClient(player, "cl_updateHealthBar", self.sv.playerStats[player.id].hp)
+
+            if self.sv.playerStats[player.id].hp == 0 then
+                if type( attacker ) == "Player" then
+                    self.network:sendToClients( "cl_n_showMessage", "#ff0000" .. player.name .. "#ffffff was killed by #00ffff" .. attacker.name )
+                else
+                    self.network:sendToClients( "cl_n_showMessage", "#ff0000".. player.name .. " #ffffffdied " )
+                end
+
+                player.character:setTumbling(true)
+                player.character:setDowned(true)
+
+                self.sv.respawns[#self.sv.respawns+1] = {player = player, time = sm.game.getCurrentTick() + respawnTime*40}
+                self.network:sendToClient(player, "cl_death")
             end
-
-            player.character:setTumbling(true)
-            player.character:setDowned(true)
-
-            self.sv.respawns[#self.sv.respawns+1] = {player = player, time = sm.game.getCurrentTick() + respawnTime*40}
-            self.network:sendToClient(player, "cl_death")
         end
     end
 end
 
 function PVP.hitbox_onProjectile( self, trigger, hitPos, hitTime, hitVelocity, _, attacker, damage, userData, hitNormal, projectileUuid )
+    if isAnyOf( projectileUuid, g_potatoProjectiles ) then
+        damage = damage/2
+
+        if survivalMode then
+            return
+        end
+    end
+    
     local owner
     for id, hitbox in ipairs(self.sv.hitboxes) do
         if hitbox.trigger.id == trigger.id then
@@ -147,6 +168,19 @@ function PVP.hitbox_onProjectile( self, trigger, hitPos, hitTime, hitVelocity, _
     end
 
     return false
+end
+
+function getGamemode()
+    --TechnologicNick is a life-saver!
+    if sm.event.sendToGame("cl_onClearConfirmButtonClick", {}) then
+        return "creative"
+    elseif sm.event.sendToGame("sv_e_setWarehouseRestrictions", {}) then
+        return "survival"
+    elseif sm.event.sendToGame("server_getLevelUuid", {}) then
+        return "challenge"
+    end
+
+    return "unknown"
 end
 
 function PVP:client_onCreate()
@@ -166,6 +200,10 @@ end
 
 function PVP:client_onFixedUpdate()
     if not self.tool:isLocal() then return end
+
+    if getGamemode() == "survival" then
+        survivalMode = true
+    end
 
     if self.cl.death and sm.game.getCurrentTick()%40 == 0 then
         self.cl.death = math.max(self.cl.death-1, 0)
@@ -202,13 +240,20 @@ end
 function PVP:client_onUpdate()
     if not self.tool:isLocal() then return end
 
-    if self.cl and self.cl.death then
-        sm.gui.setInteractionText("Respawn in " .. tostring(self.cl.death))
+    if self.cl then
+        if self.cl.death then
+            sm.gui.setInteractionText("Respawn in " .. tostring(self.cl.death))
+        end
+
+        if self.cl.hud and survivalMode then
+            self.cl.hud:destroy()
+            self.cl.hud = nil
+        end
     end
 end
 
 function PVP:cl_updateHealthBar(hp)
-    if self.cl then
+    if self.cl and self.cl.hud then
         self.cl.hud:setSliderData( "Health", maxHP * 10 + 1, hp * 10 )
     end
 end
