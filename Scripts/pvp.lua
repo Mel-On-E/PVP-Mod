@@ -114,6 +114,10 @@ function update_hitbox_positons(hitboxes)
 end
 
 function PVP:sv_updateHP(player, change, attacker)
+    if change < 0 and not player.character:isDowned() then
+        self.network:sendToClients( "cl_damageSound", { event = "impact", pos = player.character.worldPosition, damage = -change * 0.01 } )
+    end
+
     if survivalMode then --SurvivalGame
         if change > 0 then
             sm.event.sendToPlayer(player, "sv_restoreHealth", change)
@@ -268,15 +272,40 @@ function PVP:cl_death()
     end
 end
 
+function PVP:cl_damageSound(params)
+    sm.event.sendToPlayer(sm.localPlayer.getPlayer(), "cl_n_onEvent", params)
+end
+
+function PVP:client_onReload()
+    sm.gui.chatMessage("Open GUI")
+end
 
 
---[[ local oldChatMessage = sm.gui.chatMessage
 
-function chatMessageHook(msg)
-    oldChatMessage(msg)
+
+--HOOKS
+local oldBindCommand = sm.game.bindChatCommand
+
+function bindCommandHook(command, params, callback, help)
+    oldBindCommand(command, params, callback, help)
+    if not added then
+        oldBindCommand("/pvp", {}, "cl_onChatCommand", "there is no help")
+        added = true
+    end
     print("be hookin' like the cool kids do")
 end
 
-sm.gui.chatMessage = chatMessageHook
+sm.game.bindChatCommand = bindCommandHook
 
-print("HOOK SET?") ]]
+
+local oldWorldEvent = sm.event.sendToWorld
+
+function worldEventHook(world, callback, params)
+    if params[1] == "/pvp" then
+        sm.gui.chatMessage("I'm the greatest programmer on the entire flat earth!")
+    else
+        oldWorldEvent(world, callback, params)
+    end
+end
+
+sm.event.sendToWorld = worldEventHook
