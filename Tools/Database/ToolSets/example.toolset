@@ -1,0 +1,17 @@
+{
+	"toolList": [
+		{
+			"name": "tool_pvp",
+			"uuid": "3de81be1-885e-475a-8d37-4945beb0b1c2",
+			"previewRenderable": "$GAME_DATA/Character/Char_Tools/char_connecttool_preview.rend",
+			"previewRotation": [1, 0, 0, 0, 0, -1, 0, 1, 0],
+			"script": {
+				"file": "$CONTENT_DATA/Scripts/pvp.lua",
+				"class": "PVP",
+				"data": {}
+			},
+			"showInInventory": false,
+			"autoTool": true
+		}
+	]
+}
