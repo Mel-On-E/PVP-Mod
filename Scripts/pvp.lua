@@ -25,6 +25,7 @@ function PVP:sv_init()
     self.sv.hitboxes = {}
     self.sv.playerStats = {}
     self.sv.respawns = {}
+    self.sv.spawnPoints = {}
     PVP.instance = self
 end
 
@@ -63,11 +64,10 @@ function PVP:server_onFixedUpdate()
 
     for k, respawn in pairs(self.sv.respawns) do
         if respawn.time < sm.game.getCurrentTick() then
-            local spawnParams = {
+            local spawnParams = self.sv.spawnPoints[respawn.player.id] or {
                 pos = sm.vec3.one(),
                 yaw = 0,
-                pitch = 0
-            }
+                pitch = 0 }
 
             local newChar = sm.character.createCharacter( respawn.player, respawn.player:getCharacter():getWorld(), spawnParams.pos, spawnParams.yaw, spawnParams.pitch )
             respawn.player:setCharacter(newChar)
@@ -276,8 +276,12 @@ function PVP:cl_damageSound(params)
     sm.event.sendToPlayer(sm.localPlayer.getPlayer(), "cl_n_onEvent", params)
 end
 
-function PVP:client_onReload()
-    sm.gui.chatMessage("Open GUI")
+function PVP:cl_msg(msg)
+    sm.gui.chatMessage(msg)
+end
+
+function PVP:sv_msg(params)
+    self.network:sendToClient(params.player, "cl_msg", params.msg)
 end
 
 
@@ -290,6 +294,11 @@ function bindCommandHook(command, params, callback, help)
     oldBindCommand(command, params, callback, help)
     if not added then
         oldBindCommand("/pvp", {}, "cl_onChatCommand", "there is no help")
+        
+        if getGamemode() ~= "survival" then
+            oldBindCommand("/setspawn", {}, "cl_onChatCommand", "Sets the spawnpoint for your character")
+        end
+        
         added = true
     end
     print("be hookin' like the cool kids do")
@@ -303,6 +312,11 @@ local oldWorldEvent = sm.event.sendToWorld
 function worldEventHook(world, callback, params)
     if params[1] == "/pvp" then
         sm.gui.chatMessage("I'm the greatest programmer on the entire flat earth!")
+    elseif params[1] == "/setspawn" then
+        local char = params.player.character
+        local yaw = math.atan2( char.direction.y, char.direction.x ) - math.pi / 2
+        PVP.instance.sv.spawnPoints[params.player.id] = {pos = char.worldPosition, yaw = yaw, pitch = 0}
+        sm.event.sendToTool(PVP.instance.tool, "sv_msg", {player = params.player, msg = "spawnpoint set"})
     else
         oldWorldEvent(world, callback, params)
     end
