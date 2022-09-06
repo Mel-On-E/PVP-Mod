@@ -23,9 +23,16 @@ function PVP:sv_init()
 
     self.sv = {}
     self.sv.hitboxes = {}
-    self.sv.playerStats = {}
     self.sv.respawns = {}
-    self.sv.spawnPoints = {}
+
+    self.sv.saved = self.storage:load()
+    if self.sv.saved == nil then
+        self.sv.saved = {}
+        self.sv.saved.playerStats = {}
+        self.sv.saved.spawnPoints = {}
+    end
+    self.storage:save(self.sv.saved)
+
     PVP.instance = self
 end
 
@@ -41,9 +48,7 @@ function PVP:server_onFixedUpdate()
     end
 
     local function create_hitbox(player)
-        self.sv.playerStats[player.id] = {hp = maxHP}
-
-        print("creating hitbox for:", player.name)
+        self.sv.saved.playerStats[player.id] = self.sv.saved.playerStats[player.id] or {hp = maxHP}
 
         local hitbox = {}
         hitbox.player = player
@@ -64,7 +69,7 @@ function PVP:server_onFixedUpdate()
 
     for k, respawn in pairs(self.sv.respawns) do
         if respawn.time < sm.game.getCurrentTick() then
-            local spawnParams = self.sv.spawnPoints[respawn.player.id] or {
+            local spawnParams = self.sv.saved.spawnPoints[respawn.player.id] or {
                 pos = sm.vec3.one(),
                 yaw = 0,
                 pitch = 0 }
@@ -72,11 +77,12 @@ function PVP:server_onFixedUpdate()
             local newChar = sm.character.createCharacter( respawn.player, respawn.player:getCharacter():getWorld(), spawnParams.pos, spawnParams.yaw, spawnParams.pitch )
             respawn.player:setCharacter(newChar)
 
-            self.sv.playerStats[respawn.player.id].hp = maxHP
-
             sm.effect.playEffect( "Characterspawner - Activate", spawnParams.pos )
 
             self.sv.respawns[k] = nil
+
+            self.sv.saved.playerStats[respawn.player.id].hp = maxHP
+            self.storage:save(self.sv.saved)
         end
     end
 end
@@ -126,12 +132,12 @@ function PVP:sv_updateHP(player, change, attacker)
         end
 
     else --Custom Health HUD
-        local hp = self.sv.playerStats[player.id].hp
+        local hp = self.sv.saved.playerStats[player.id].hp
         if hp and hp > 0 then
-            self.sv.playerStats[player.id].hp = math.min(math.max(hp + change, 0), maxHP)
-            self.network:sendToClient(player, "cl_updateHealthBar", self.sv.playerStats[player.id].hp)
+            self.sv.saved.playerStats[player.id].hp = math.min(math.max(hp + change, 0), maxHP)
+            self.network:sendToClient(player, "cl_updateHealthBar", self.sv.saved.playerStats[player.id].hp)
 
-            if self.sv.playerStats[player.id].hp == 0 then
+            if self.sv.saved.playerStats[player.id].hp == 0 then
                 if type( attacker ) == "Player" then
                     self.network:sendToClients( "cl_n_showMessage", "#ff0000" .. player.name .. "#ffffff was killed by #00ffff" .. attacker.name )
                 else
@@ -144,6 +150,8 @@ function PVP:sv_updateHP(player, change, attacker)
                 self.sv.respawns[#self.sv.respawns+1] = {player = player, time = sm.game.getCurrentTick() + respawnTime*40}
                 self.network:sendToClient(player, "cl_death")
             end
+
+            self.storage:save(self.sv.saved)
         end
     end
 end
@@ -280,8 +288,12 @@ function PVP:cl_msg(msg)
     sm.gui.chatMessage(msg)
 end
 
-function PVP:sv_msg(params)
-    self.network:sendToClient(params.player, "cl_msg", params.msg)
+function PVP:sv_setSpawnpoint(player)
+    local char = player.character
+    local yaw = math.atan2( char.direction.y, char.direction.x ) - math.pi / 2
+    self.sv.saved.spawnPoints[player.id] = {pos = char.worldPosition, yaw = yaw, pitch = 0}
+
+    self.network:sendToClient(player, "cl_msg", "spawnpoint set")
 end
 
 
@@ -313,10 +325,7 @@ function worldEventHook(world, callback, params)
     if params[1] == "/pvp" then
         sm.gui.chatMessage("I'm the greatest programmer on the entire flat earth!")
     elseif params[1] == "/setspawn" then
-        local char = params.player.character
-        local yaw = math.atan2( char.direction.y, char.direction.x ) - math.pi / 2
-        PVP.instance.sv.spawnPoints[params.player.id] = {pos = char.worldPosition, yaw = yaw, pitch = 0}
-        sm.event.sendToTool(PVP.instance.tool, "sv_msg", {player = params.player, msg = "spawnpoint set"})
+        sm.event.sendToTool(PVP.instance.tool, "sv_setSpawnpoint", params.player)
     else
         oldWorldEvent(world, callback, params)
     end
