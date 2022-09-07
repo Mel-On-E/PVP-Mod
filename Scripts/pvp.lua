@@ -34,6 +34,7 @@ function PVP:sv_init()
         self.sv.saved.settings = {}
         self.sv.saved.settings.pvp = true
         self.sv.saved.settings.nameTags = false
+        self.sv.saved.settings.teams = {}
     end
     self.storage:save(self.sv.saved)
 
@@ -185,8 +186,20 @@ function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity,
     assert(owner, "Couldn't find owner of hitbox")
 
     if owner ~= attacker then
-        sm.gui.chatMessage("#ff0000Ouch!")
-        self:sv_updateHP(owner, -damage, attacker)
+        local friendlyFire = false
+
+        if type(attacker) == "Player" then
+            local ownerTeam = self.sv.saved.settings.teams[owner.id]
+            local attackerTeam = self.sv.saved.settings.teams[attacker.id]
+            if ownerTeam and (ownerTeam == attackerTeam) then
+                friendlyFire = true
+            end
+        end
+
+        if not friendlyFire then
+            sm.gui.chatMessage("#ff0000Ouch!")
+            self:sv_updateHP(owner, -damage, attacker)
+        end
     end
 
     return false
@@ -200,6 +213,8 @@ function PVP:client_onCreate()
     self.cl = {}
     self.cl.pvp = true
     self.cl.nameTags = false
+    self.cl.team = nil
+    self.cl.teams = {}
 
     self.cl.hitboxes = {}
 
@@ -235,6 +250,7 @@ function PVP:client_onFixedUpdate()
             hitbox.effect:setParameter("color", sm.color.new(1,1,1))
             hitbox.effect:setScale(hitboxSize)
             hitbox.effect:start()
+
             return hitbox
         end
 
@@ -243,7 +259,6 @@ function PVP:client_onFixedUpdate()
         end
 
         update_hitbox_list(self.cl.hitboxes, create_hitbox, destroy_hitbox)
-
 
         update_hitbox_positons(self.cl.hitboxes)
     end
@@ -282,10 +297,28 @@ function PVP:client_onClientDataUpdate(data)
         self.cl.nameTags = data.nameTags
         sm.gui.chatMessage("Player Names: " .. (self.cl.nameTags and "On" or "Off"))
 
-        for _, player in ipairs(sm.player.getAllPlayers()) do
-            if player.character then
-                player.character:setNameTag(data.nameTags and player.name or "")
-            end
+        self:cl_updateNameTags()
+    end
+
+    if self.cl.team ~= data.teams[sm.localPlayer.getPlayer().id] then
+        self.cl.team = data.teams[sm.localPlayer.getPlayer().id]
+        sm.gui.chatMessage(string.format("Your Team: %s", self.cl.team or "none"))
+
+        self:cl_updateNameTags()
+    end
+    self.cl.teams = data.teams
+
+    --TODO adjust nametags by team
+end
+
+function PVP:cl_updateNameTags()
+    local localPlayer = sm.localPlayer.getPlayer()
+
+    for _, player in ipairs(sm.player.getAllPlayers()) do
+        if player.character then
+            local sameTeam = self.cl.teams[localPlayer.id] == self.cl.teams[player.id]
+            local nameTag = self.cl.nameTags and (sameTeam or self.cl.team == nil)
+            player.character:setNameTag(nameTag and player.name or "")
         end
     end
 end
@@ -336,6 +369,13 @@ function PVP:sv_toggleNameTags()
     self.network:setClientData(self.sv.saved.settings)
 end
 
+function PVP:sv_setTeam(params)
+    self.sv.saved.settings.teams[params.player.id] = params.team
+    self.storage:save(self.sv.saved)
+
+    self.network:setClientData(self.sv.saved.settings)
+end
+
 
 
 --HOOKS
@@ -352,6 +392,9 @@ function bindCommandHook(command, params, callback, help)
         if getGamemode() ~= "survival" then
             oldBindCommand("/setspawn", {}, "cl_onChatCommand", "Sets the spawnpoint for your character")
         end
+
+        oldBindCommand("/team", {{ "int", "teamNumber", false }}, "cl_onChatCommand", "Joins team of the number given")
+        oldBindCommand("/noteam", {}, "cl_onChatCommand", "Leave all teams")
         
         added = true
     end
@@ -370,6 +413,10 @@ function worldEventHook(world, callback, params)
         sm.event.sendToTool(PVP.instance.tool, "sv_setSpawnpoint", params.player)
     elseif params[1] == "/nametags" then
         sm.event.sendToTool(PVP.instance.tool, "sv_toggleNameTags")
+    elseif params[1] == "/team" then
+        sm.event.sendToTool(PVP.instance.tool, "sv_setTeam", {player = params.player, team = params[2]})
+    elseif params[1] == "/noteam" then
+        sm.event.sendToTool(PVP.instance.tool, "sv_setTeam", {player = params.player, team = nil})
     else
         oldWorldEvent(world, callback, params)
     end
