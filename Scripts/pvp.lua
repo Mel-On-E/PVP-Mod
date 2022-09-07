@@ -22,7 +22,6 @@ function PVP:sv_init()
     if PVP.instance and PVP.instance ~= self then return end
 
     self.sv = {}
-    self.sv.enablePVP = true
     self.sv.hitboxes = {}
     self.sv.respawns = {}
 
@@ -31,10 +30,14 @@ function PVP:sv_init()
         self.sv.saved = {}
         self.sv.saved.playerStats = {}
         self.sv.saved.spawnPoints = {}
+
+        self.sv.saved.settings = {}
+        self.sv.saved.settings.pvp = true
+        self.sv.saved.settings.nameTags = false
     end
     self.storage:save(self.sv.saved)
 
-    self.network:setClientData({pvp = self.sv.enablePVP})
+    self.network:setClientData(self.sv.saved.settings)
 
     PVP.instance = self
 end
@@ -64,7 +67,7 @@ function PVP:server_onFixedUpdate()
 
     update_hitbox_positons(self.sv.hitboxes)
 
-    if self.sv.enablePVP and not survivalMode and sm.game.getCurrentTick() % 40 == 0 then
+    if self.sv.saved.settings.pvp and not survivalMode and sm.game.getCurrentTick() % 40 == 0 then
         for _, player in pairs(sm.player.getAllPlayers()) do
             self:sv_updateHP(player, healthRegenPerSecond)
         end
@@ -123,7 +126,7 @@ function update_hitbox_positons(hitboxes)
 end
 
 function PVP:sv_updateHP(player, change, attacker)
-    if not self.sv.enablePVP then return end
+    if not self.sv.saved.settings.pvp then return end
 
     if change < 0 and not player.character:isDowned() then
         self.network:sendToClients( "cl_damageSound", { event = "impact", pos = player.character.worldPosition, damage = -change * 0.01 } )
@@ -162,7 +165,7 @@ function PVP:sv_updateHP(player, change, attacker)
 end
 
 function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity, _, attacker, damage, userData, hitNormal, projectileUuid )
-    if not self.sv.enablePVP then return false end
+    if not self.sv.saved.settings.pvp then return false end
     
     if isAnyOf( projectileUuid, g_potatoProjectiles ) then
         damage = damage/2
@@ -195,7 +198,9 @@ function PVP:client_onCreate()
     sm.gui.chatMessage("#ff0088Thanks for playing with the PVP mod! (0.9)" )
 
     self.cl = {}
-    self.cl.enablePVP = true
+    self.cl.pvp = true
+    self.cl.nameTags = false
+
     self.cl.hitboxes = {}
 
     self.cl.hud = sm.gui.createSurvivalHudGui()
@@ -260,15 +265,26 @@ function PVP:client_onUpdate()
 end
 
 function PVP:client_onClientDataUpdate(data)
-    if self.cl.enablePVP ~= data.pvp then
-        self.cl.enablePVP = data.pvp
-        sm.gui.chatMessage("PVP: " .. (self.cl.enablePVP and "On" or "Off"))
+    if self.cl.pvp ~= data.pvp then
+        self.cl.pvp = data.pvp
+        sm.gui.chatMessage("PVP: " .. (self.cl.pvp and "On" or "Off"))
 
         if self.cl.hud then
-            if self.cl.enablePVP then
+            if self.cl.pvp then
                 self.cl.hud:open()
             else
                 self.cl.hud:close()
+            end
+        end
+    end
+
+    if self.cl.nameTags ~= data.nameTags then
+        self.cl.nameTags = data.nameTags
+        sm.gui.chatMessage("Player Names: " .. (self.cl.nameTags and "On" or "Off"))
+
+        for _, player in ipairs(sm.player.getAllPlayers()) do
+            if player.character then
+                player.character:setNameTag(data.nameTags and player.name or "")
             end
         end
     end
@@ -299,8 +315,10 @@ function PVP:cl_msg(msg)
 end
 
 function PVP:sv_togglePVP()
-    self.sv.enablePVP = not self.sv.enablePVP
-    self.network:setClientData({pvp = self.sv.enablePVP})
+    self.sv.saved.settings.pvp = not self.sv.saved.settings.pvp
+    self.storage:save(self.sv.saved)
+
+    self.network:setClientData(self.sv.saved.settings)
 end
 
 function PVP:sv_setSpawnpoint(player)
@@ -311,6 +329,12 @@ function PVP:sv_setSpawnpoint(player)
     self.network:sendToClient(player, "cl_msg", "spawnpoint set")
 end
 
+function PVP:sv_toggleNameTags()
+    self.sv.saved.settings.nameTags = not self.sv.saved.settings.nameTags
+    self.storage:save(self.sv.saved)
+
+    self.network:setClientData(self.sv.saved.settings)
+end
 
 
 
@@ -321,7 +345,8 @@ function bindCommandHook(command, params, callback, help)
     oldBindCommand(command, params, callback, help)
     if not added then
         if sm.isHost then
-            oldBindCommand("/pvp", {}, "cl_onChatCommand", "toggle pvp mod")
+            oldBindCommand("/pvp", {}, "cl_onChatCommand", "Toggle PVP mod")
+            oldBindCommand("/nametags", {}, "cl_onChatCommand", "Toggles player name tags")
         end
         
         if getGamemode() ~= "survival" then
@@ -343,6 +368,8 @@ function worldEventHook(world, callback, params)
         sm.event.sendToTool(PVP.instance.tool, "sv_togglePVP")
     elseif params[1] == "/setspawn" then
         sm.event.sendToTool(PVP.instance.tool, "sv_setSpawnpoint", params.player)
+    elseif params[1] == "/nametags" then
+        sm.event.sendToTool(PVP.instance.tool, "sv_toggleNameTags")
     else
         oldWorldEvent(world, callback, params)
     end
