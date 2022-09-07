@@ -70,7 +70,7 @@ function PVP:server_onFixedUpdate()
 
     if self.sv.saved.settings.pvp and not survivalMode and sm.game.getCurrentTick() % 40 == 0 then
         for _, player in pairs(sm.player.getAllPlayers()) do
-            self:sv_updateHP(player, healthRegenPerSecond)
+            self:sv_updateHP({player = player, change = healthRegenPerSecond})
         end
     end
 
@@ -135,8 +135,12 @@ function update_hitboxes(hitboxes)
     end
 end
 
-function PVP:sv_updateHP(player, change, attacker)
+function PVP:sv_updateHP(params)
     if not self.sv.saved.settings.pvp then return end
+
+    local player = params.player
+    local change = params.change
+    local attacker = params.attacker
 
     if change < 0 and not player.character:isDowned() then
         self.network:sendToClients( "cl_damageSound", { event = "impact", pos = player.character.worldPosition, damage = -change * 0.01 } )
@@ -207,7 +211,7 @@ function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity,
 
         if not friendlyFire then
             sm.gui.chatMessage("#ff0000Ouch!")
-            self:sv_updateHP(owner, -damage, attacker)
+            self:sv_updateHP({player = owner, change = -damage, attacker = attacker})
         end
     end
 
@@ -432,6 +436,23 @@ function worldEventHook(world, callback, params)
 end
 
 sm.event.sendToWorld = worldEventHook
+
+
+local oldExplode = sm.physics.explode
+
+function explodeHook(position, level, destructionRadius, impulseRadius, magnitude, effectName, ignoreShape, parameters)
+    oldExplode(position, level, destructionRadius, impulseRadius, magnitude, effectName, ignoreShape, parameters)
+
+    if getGamemode() == "survival" then return end
+
+    for _, character in ipairs(sm.physics.getSphereContacts(position, destructionRadius).characters) do
+        if character:getPlayer() then
+            sm.event.sendToTool(PVP.instance.tool, "sv_updateHP", {player = character:getPlayer(), change = -level*2})
+        end
+    end
+end
+
+sm.physics.explode = explodeHook
 
 
 --helper functions
