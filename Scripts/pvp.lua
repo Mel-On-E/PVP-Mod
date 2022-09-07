@@ -157,7 +157,7 @@ function PVP:sv_updateHP(player, change, attacker)
 
             if self.sv.saved.playerStats[player.id].hp == 0 then
                 if type( attacker ) == "Player" then
-                    self.network:sendToClients( "cl_n_showMessage", "#ff0000" .. player.name .. "#ffffff was killed by #00ffff" .. attacker.name )
+                    self.network:sendToClients( "cl_n_showMessage", "#ff0000" .. player.name .. "#ffffff was pwned by #00ffff" .. attacker.name )
                 else
                     self.network:sendToClients( "cl_n_showMessage", "#ff0000".. player.name .. " #ffffffdied " )
                 end
