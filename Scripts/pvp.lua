@@ -66,7 +66,7 @@ function PVP:server_onFixedUpdate()
 
     update_hitbox_list(self.sv.hitboxes, create_hitbox)
 
-    update_hitbox_positons(self.sv.hitboxes)
+    update_hitboxes(self.sv.hitboxes)
 
     if self.sv.saved.settings.pvp and not survivalMode and sm.game.getCurrentTick() % 40 == 0 then
         for _, player in pairs(sm.player.getAllPlayers()) do
@@ -110,18 +110,27 @@ function update_hitbox_list(list, createFunction, destroyFunction )
     end
 end
 
-function update_hitbox_positons(hitboxes)
+function update_hitboxes(hitboxes)
     for id, hitbox in ipairs(hitboxes) do
-        local newPos = hitbox.player.character.worldPosition
-        local vel = hitbox.player.character.velocity
-        newPos = newPos + vel:safeNormalize(sm.vec3.zero())*vel:length()^0.5/8
+        local char = hitbox.player.character
+        local newPos = char.worldPosition + 
+            char.velocity:safeNormalize(sm.vec3.zero()) *
+            char.velocity:length()^0.5/8
+
+        local size = hitboxSize
+        if char:isCrouching() then --crouch offset
+            size = sm.vec3.new(size.x, size.y, size.z*0.8)
+            newPos = newPos + sm.vec3.new(0,0,0.125)
+        end
 
         if hitbox.trigger then
             hitbox.trigger:setWorldPosition(newPos)
+            hitbox.trigger:setSize(size/2)
         end
 
         if hitbox.effect then
             hitbox.effect:setPosition(newPos)
+            hitbox.effect:setScale(size)
         end
     end
 end
@@ -260,7 +269,7 @@ function PVP:client_onFixedUpdate()
 
         update_hitbox_list(self.cl.hitboxes, create_hitbox, destroy_hitbox)
 
-        update_hitbox_positons(self.cl.hitboxes)
+        update_hitboxes(self.cl.hitboxes)
     end
 end
 
