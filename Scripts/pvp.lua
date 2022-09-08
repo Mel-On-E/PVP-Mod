@@ -142,7 +142,7 @@ function PVP:sv_updateHP(params)
     local change = params.change
     local attacker = params.attacker
 
-    if change < 0 and not player.character:isDowned() then
+    if (not params.ignoreSound) and (change < 0 and not player.character:isDowned()) then
         self.network:sendToClients( "cl_damageSound", { event = "impact", pos = player.character.worldPosition, damage = -change * 0.01 } )
     end
 
@@ -198,24 +198,35 @@ function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity,
     end
     assert(owner, "Couldn't find owner of hitbox")
 
-    if owner ~= attacker then
+    self:sv_attack({victim = owner, attacker = attacker, damage = damage})
+
+    return false
+end
+
+function PVP:sv_attack(params)
+    local victim = params.victim
+    local attacker = params.attacker
+    local damage = params.damage
+
+    if victim ~= attacker then
         local friendlyFire = false
 
         if type(attacker) == "Player" then
-            local ownerTeam = self.sv.saved.settings.teams[owner.id]
+            local victimTeam = self.sv.saved.settings.teams[victim.id]
             local attackerTeam = self.sv.saved.settings.teams[attacker.id]
-            if ownerTeam and (ownerTeam == attackerTeam) then
+            if victimTeam and (victimTeam == attackerTeam) then
                 friendlyFire = true
             end
         end
 
         if not friendlyFire then
-            sm.gui.chatMessage("#ff0000Ouch!")
-            self:sv_updateHP({player = owner, change = -damage, attacker = attacker})
+            self:sv_updateHP({player = victim, change = -damage, attacker = attacker, ignoreSound = params.ignoreSound})
         end
     end
+end
 
-    return false
+function PVP:sv_sendAttack(params)
+    sm.event.sendToTool(PVP.instance.tool, "sv_attack", params)
 end
 
 function PVP:client_onCreate()
@@ -230,6 +241,7 @@ function PVP:client_onCreate()
     self.cl.teams = {}
 
     self.cl.hitboxes = {}
+    self.cl.meleeAttacks = {sledgehammer_attack1 = 0, sledgehammer_attack2 = 0}
 
     self.cl.hud = sm.gui.createSurvivalHudGui()
     self.cl.hud:setVisible("FoodBar", false)
@@ -268,13 +280,46 @@ function PVP:client_onFixedUpdate()
         end
 
         local function destroy_hitbox(hitbox)
-            hitbox.effect:destroy()
+            if hitbox and hitbox.effect and sm.exists(hitbox.effect) then --just wanna make sure, bro
+                hitbox.effect:destroy()
+            end
         end
 
         update_hitbox_list(self.cl.hitboxes, create_hitbox, destroy_hitbox)
 
         update_hitboxes(self.cl.hitboxes)
     end
+
+    --detecting player melee attacks via animation
+    local char = sm.localPlayer.getPlayer().character
+    if char and getGamemode() ~= "survival" then
+        local prevAttacks = self.cl.meleeAttacks
+
+        self.cl.meleeAttacks = {sledgehammer_attack1 = 0, sledgehammer_attack2 = 0}
+        for _, anim in ipairs(char:getActiveAnimations()) do
+            if anim.name == "sledgehammer_attack1" or anim.name == "sledgehammer_attack2" then
+                self.cl.meleeAttacks[anim.name] = prevAttacks[anim.name] + 1
+            end
+        end
+
+        local hitDelay = 7
+        if self.cl.meleeAttacks.sledgehammer_attack1 == hitDelay or self.cl.meleeAttacks.sledgehammer_attack2 == hitDelay then
+            --new melee attack
+            local Range = 3.0
+            local Damage = 20
+
+            local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
+            if success then
+                if result.type == "character" and result:getCharacter():getPlayer() then
+                    self.network:sendToServer("sv_sendAttack", {victim = result:getCharacter():getPlayer(), attacker = sm.localPlayer.getPlayer(), damage = Damage, ignoreSound = true})
+                end
+            end
+        end
+    end
+end
+
+function PVP:cl_test()
+    sm.gui.chatMessage("yo the test is working!")
 end
 
 function PVP:client_onUpdate()
@@ -293,6 +338,8 @@ function PVP:client_onUpdate()
 end
 
 function PVP:client_onClientDataUpdate(data)
+    if not self.cl then return end --why the fuck does this even happen?
+
     if self.cl.pvp ~= data.pvp then
         self.cl.pvp = data.pvp
         sm.gui.chatMessage("PVP: " .. (self.cl.pvp and "On" or "Off"))
@@ -468,3 +515,7 @@ function getGamemode()
 
     return "unknown"
 end
+
+--TODO
+--fix doulbe sound on melee
+--make hp bar update for clients
