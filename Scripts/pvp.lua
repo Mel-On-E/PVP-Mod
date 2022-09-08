@@ -14,6 +14,8 @@ local respawnTime = 10
 local showHitboxes = true --DEBUG
 local survivalMode = false
 
+local g_cl_tool
+
 function PVP:server_onCreate()
     self:sv_init()
 end
@@ -247,7 +249,7 @@ end
 
 function PVP:client_onCreate()
     if not self.tool:isLocal() then return end
-
+    g_cl_tool = self.tool
     sm.gui.chatMessage("#ff0088Thanks for playing with the PVP mod! (0.9)" )
 
     self.cl = {}
@@ -396,6 +398,10 @@ function PVP:cl_updateNameTags()
 end
 
 function PVP:cl_updateHealthBar(hp)
+    if not self.cl then
+        sm.event.sendToTool(g_cl_tool, "cl_updateHealthBar", hp)
+    end
+
     if self.cl and self.cl.hud then
         self.cl.hud:setSliderData( "Health", maxHP * 10 + 1, hp * 10 )
     end
@@ -505,16 +511,12 @@ local oldMeleeAttack = sm.melee.meleeAttack
 local function meleeAttackHook(uuid, damage, origin, directionRange, source, delay, power)
     oldMeleeAttack(uuid, damage, origin, directionRange, source, delay, power)
 
-    --print("melee hook")
-
     local success, result
     if sm.isServerMode() then
         success, result = sm.physics.raycast(origin, origin + directionRange)
     else
        success, result = sm.localPlayer.getRaycast( directionRange:length(), origin, directionRange:normalize() )
     end
-
-    print(success, result.type)
 
     if not success then return end
     if result.type ~= "character" then return end
@@ -527,8 +529,7 @@ local function meleeAttackHook(uuid, damage, origin, directionRange, source, del
     local params = {
         victim = char:getPlayer(),
         attacker = source,
-        damage = damage,
-        ignoreSound = true
+        damage = damage
     }
 
     sm.event.sendToTool(PVP.instance.tool, sm.isServerMode() and "sv_sendAttack" or "cl_sendAttack", params)
@@ -568,6 +569,3 @@ function getGamemode()
 
     return "unknown"
 end
-
---TODO
---make hp bar update for clients
