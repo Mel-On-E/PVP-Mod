@@ -124,6 +124,11 @@ function update_hitboxes(hitboxes)
             newPos = newPos + sm.vec3.new(0,0,0.125)
         end
 
+        local lockingInteractable = char:getLockingInteractable()
+        if lockingInteractable and lockingInteractable:hasSeat() then --seat offset
+            newPos = newPos + sm.vec3.new(0,0,0.125)
+        end
+
         if hitbox.trigger then
             hitbox.trigger:setWorldPosition(newPos)
             hitbox.trigger:setSize(size/2)
@@ -155,6 +160,13 @@ function PVP:sv_updateHP(params)
         end
 
     else --Custom Health HUD
+        if change < 0 then
+            local lockingInteractable = player.character:getLockingInteractable()
+            if lockingInteractable and lockingInteractable:hasSeat() then
+                lockingInteractable:setSeatCharacter( player.character )
+            end
+        end
+
         local hp = self.sv.saved.playerStats[player.id].hp
         if hp and hp > 0 then
             self.sv.saved.playerStats[player.id].hp = math.min(math.max(hp + change, 0), maxHP)
@@ -559,4 +571,3 @@ end
 
 --TODO
 --make hp bar update for clients
---damg makes you get out of a seat
