@@ -61,6 +61,7 @@ function PVP:server_onFixedUpdate()
         hitbox.player = player
         hitbox.trigger = sm.areaTrigger.createBox(hitboxSize/2, player.character.worldPosition)
         hitbox.trigger:bindOnProjectile("sv_hitboxOnProjectile", self)
+
         return hitbox
     end
 
@@ -183,24 +184,27 @@ function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity,
     
     if isAnyOf( projectileUuid, g_potatoProjectiles ) then
         damage = damage/2
-
-        if survivalMode then
-            return
-        end
+    elseif survivalMode then
+        return false
     end
     
+    local owner = self:sv_getHitboxOwner(trigger.id)
+
+    self:sv_attack({victim = owner, attacker = attacker, damage = damage})
+
+    return false
+end
+
+function PVP:sv_getHitboxOwner(triggerID)
     local owner
     for id, hitbox in ipairs(self.sv.hitboxes) do
-        if hitbox.trigger.id == trigger.id then
+        if hitbox.trigger.id == triggerID then
             owner = hitbox.player
             break
         end
     end
     assert(owner, "Couldn't find owner of hitbox")
-
-    self:sv_attack({victim = owner, attacker = attacker, damage = damage})
-
-    return false
+    return owner
 end
 
 function PVP:sv_attack(params)
@@ -318,10 +322,6 @@ function PVP:client_onFixedUpdate()
     end
 end
 
-function PVP:cl_test()
-    sm.gui.chatMessage("yo the test is working!")
-end
-
 function PVP:client_onUpdate()
     if not self.tool:isLocal() then return end
 
@@ -407,6 +407,10 @@ function PVP:cl_msg(msg)
     sm.gui.chatMessage(msg)
 end
 
+function PVP:cl_sendAttack(params)
+    self.network:sendToServer("sv_sendAttack", params)
+end
+
 function PVP:sv_togglePVP()
     self.sv.saved.settings.pvp = not self.sv.saved.settings.pvp
     self.storage:save(self.sv.saved)
@@ -441,7 +445,7 @@ end
 --HOOKS
 local oldBindCommand = sm.game.bindChatCommand
 
-function bindCommandHook(command, params, callback, help)
+local function bindCommandHook(command, params, callback, help)
     oldBindCommand(command, params, callback, help)
     if not added then
         if sm.isHost then
@@ -466,7 +470,7 @@ sm.game.bindChatCommand = bindCommandHook
 
 local oldWorldEvent = sm.event.sendToWorld
 
-function worldEventHook(world, callback, params)
+local function worldEventHook(world, callback, params)
     if params[1] == "/pvp" then
         sm.event.sendToTool(PVP.instance.tool, "sv_togglePVP")
     elseif params[1] == "/setspawn" then
@@ -484,10 +488,46 @@ end
 
 sm.event.sendToWorld = worldEventHook
 
+local oldMeleeAttack = sm.melee.meleeAttack
+
+local function meleeAttackHook(uuid, damage, origin, directionRange, source, delay, power)
+    oldMeleeAttack(uuid, damage, origin, directionRange, source, delay, power)
+
+    --print("melee hook")
+
+    local success, result
+    if sm.isServerMode() then
+        success, result = sm.physics.raycast(origin, origin + directionRange)
+    else
+       success, result = sm.localPlayer.getRaycast( directionRange:length(), origin, directionRange:normalize() )
+    end
+
+    print(success, result.type)
+
+    if not success then return end
+    if result.type ~= "character" then return end
+
+    local char = result:getCharacter()
+    if not char:getPlayer() then return end
+
+    if getGamemode() == "survival" and type(source) ~= "Player" then return end
+
+    local params = {
+        victim = char:getPlayer(),
+        attacker = source,
+        damage = damage,
+        ignoreSound = true
+    }
+
+    sm.event.sendToTool(PVP.instance.tool, sm.isServerMode() and "sv_sendAttack" or "cl_sendAttack", params)
+end
+
+sm.melee.meleeAttack = meleeAttackHook
+
 
 local oldExplode = sm.physics.explode
 
-function explodeHook(position, level, destructionRadius, impulseRadius, magnitude, effectName, ignoreShape, parameters)
+local function explodeHook(position, level, destructionRadius, impulseRadius, magnitude, effectName, ignoreShape, parameters)
     oldExplode(position, level, destructionRadius, impulseRadius, magnitude, effectName, ignoreShape, parameters)
 
     if getGamemode() == "survival" then return end
@@ -500,6 +540,7 @@ function explodeHook(position, level, destructionRadius, impulseRadius, magnitud
 end
 
 sm.physics.explode = explodeHook
+
 
 
 --helper functions
@@ -517,5 +558,5 @@ function getGamemode()
 end
 
 --TODO
---fix doulbe sound on melee
 --make hp bar update for clients
+--damg makes you get out of a seat
