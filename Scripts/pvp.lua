@@ -11,7 +11,7 @@ local healthRegenPerSecond = 1
 local maxHP = 100
 local respawnTime = 10
 
-local showHitboxes = true --DEBUG
+local showHitboxes = false --DEBUG
 local survivalMode = false
 
 local g_cl_tool
@@ -476,7 +476,7 @@ local function bindCommandHook(command, params, callback, help)
         
         added = true
     end
-    print("be hookin' like the cool kids do")
+    --print("be hookin' like the cool kids do")
 end
 
 sm.game.bindChatCommand = bindCommandHook
