@@ -20,10 +20,6 @@ function PVP:server_onCreate()
     self:sv_init()
 end
 
-function PVP:server_onCreate()
-    self.hitPing = sm.gui.createNameTagGui()
-end
-
 function PVP:sv_init()
     if PVP.instance and PVP.instance ~= self then return end
 
@@ -147,7 +143,7 @@ function update_hitboxes(hitboxes)
     end
 end
 
-function PVP:sv_updateHP(params)
+function PVP:sv_updateHP(params,caller)if caller then return end
     if not self.sv.saved.settings.pvp then return end
 
     local player = params.player
@@ -198,6 +194,7 @@ function PVP:sv_updateHP(params)
 end
 
 function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity, _, attacker, damage, userData, hitNormal, projectileUuid )
+    -- if type(trigger) == "player" then return
     if not self.sv.saved.settings.pvp then return false end
     
     if isAnyOf( projectileUuid, g_potatoProjectiles ) then
@@ -225,7 +222,7 @@ function PVP:sv_getHitboxOwner(triggerID)
     return owner
 end
 
-function PVP:sv_attack(params)
+function PVP:sv_attack(params,caller)if caller then return end
     local victim = params.victim
     local attacker = params.attacker
     local damage = params.damage
@@ -243,18 +240,19 @@ function PVP:sv_attack(params)
 
         if not friendlyFire then
             self:sv_updateHP({player = victim, change = -damage, attacker = attacker, ignoreSound = params.ignoreSound})
+            if self.sv.saved.settings.lifeSteal then
+                local VictimHP = self.sv.saved.playerStats[victim.id].hp
+                local attackerHP = self.sv.saved.playerStats[attacker.id].hp
+                if VictimHP <= 0 then
+                    self.sv.saved.playerStats[attacker.id].hp = math.min(math.max(attackerHP + 25, 0), maxHP)
+                end
+            end
         end
     end
 end
 
-function PVP:sv_sendAttack( params, damage, attacker )
-    local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
-    if success then
-        victim = result:getCharacter():getPlayer()
-        sm.event.sendToTool(PVP.instance.tool, "sv_attack", {victim = victim, attacker = attacker, damage = damage, ignoreSound = true})
-        
-        self.network.sendToClient(attacker,"playerHit",{victim=victim,damage=damage})
-    end
+function PVP:sv_sendAttack(params,caller)if caller then return end
+    sm.event.sendToTool(PVP.instance.tool, "sv_attack", params)
 end
 
 function PVP:client_onCreate()
@@ -339,18 +337,13 @@ function PVP:client_onFixedUpdate()
             local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
             if success then
                 if result.type == "character" and result:getCharacter():getPlayer() then
-                    cl_sendAttack()
-                    -- self.network:sendToServer("sv_sendAttack")
+                    self.network:sendToServer("sv_sendAttack", {victim = result:getCharacter():getPlayer(), attacker = sm.localPlayer.getPlayer(), damage = Damage, ignoreSound = true})
                 end
             end
         end
     end
 
     self:cl_updateNameTags()
-
-    if self.hitOpened + 19 > sm.game.getCurrentTick() then
-        self.hitPing:close()
-    end
 end
 
 function PVP:client_onUpdate()
@@ -419,7 +412,7 @@ function PVP:cl_updateHealthBar(hp)
 end
 
 function PVP:cl_n_showMessage(msg)
-    sm.gui.chatMessage(msg)
+	sm.gui.chatMessage(msg)
 end
 
 function PVP:cl_death()
@@ -436,30 +429,20 @@ function PVP:cl_msg(msg)
     sm.gui.chatMessage(msg)
 end
 
-function PVP:cl_sendAttack( damage )
-    self.network:sendToServer("sv_sendAttack", damage or 20)
+function PVP:cl_sendAttack(params)
+    self.network:sendToServer("sv_sendAttack", params)
 end
 
-function PVP:playerHit( params )-- victim damage
-    local gui = self.hitPing
-    local color = hslToHex(math.random()*254, 100, damage/100*255)
-
-    print("COLOR COLOR COLOR",color)
-
-    gui:setWorldPosition(params.victim.character.worldPosition)
-    gui:setText("#"..color..params.damage)
-    gui:open()
-    self.hitOpened = sm.game.getCurrentTick()
-end
-
-function PVP:sv_togglePVP()
+function PVP:sv_togglePVP(_,caller)
+    if caller then return end
     self.sv.saved.settings.pvp = not self.sv.saved.settings.pvp
     self.storage:save(self.sv.saved)
 
     self.network:setClientData(self.sv.saved.settings)
 end
 
-function PVP:sv_setSpawnpoint(player)
+function PVP:sv_setSpawnpoint(player,caller)
+    if caller then return end
     local char = player.character
     local yaw = math.atan2( char.direction.y, char.direction.x ) - math.pi / 2
     self.sv.saved.spawnPoints[player.id] = {pos = char.worldPosition, yaw = yaw, pitch = 0}
@@ -467,20 +450,29 @@ function PVP:sv_setSpawnpoint(player)
     self.network:sendToClient(player, "cl_msg", "spawnpoint set")
 end
 
-function PVP:sv_toggleNameTags()
+function PVP:sv_toggleNameTags(_,caller)
+    if caller then return end
     self.sv.saved.settings.nameTags = not self.sv.saved.settings.nameTags
     self.storage:save(self.sv.saved)
 
     self.network:setClientData(self.sv.saved.settings)
 end
 
-function PVP:sv_setTeam(params)
+function PVP:sv_setTeam(params,caller)
+    if caller then return end
     self.sv.saved.settings.teams[params.player.id] = params.team
     self.storage:save(self.sv.saved)
 
     self.network:setClientData(self.sv.saved.settings)
 end
 
+function PVP:sv_setLifeSteal(params,caller)
+    if caller then return end
+    self.sv.saved.settings.lifeSteal = not self.sv.saved.settings.lifeSteal
+    self.storage:save(self.sv.saved)
+
+    self.network:setClientData(self.sv.saved.settings)
+end
 
 
 --HOOKS
@@ -492,6 +484,7 @@ local function bindCommandHook(command, params, callback, help)
         if sm.isHost then
             oldBindCommand("/pvp", {}, "cl_onChatCommand", "Toggle PVP mod")
             oldBindCommand("/nametags", {}, "cl_onChatCommand", "Toggles player name tags")
+            oldBindCommand("/lifesteal", { { "bool", "enable", true } }, "cl_onChatCommand", "gains health after kill")
         end
         
         if getGamemode() ~= "survival" then
@@ -527,6 +520,8 @@ local function worldEventHook(world, callback, params)
         sm.event.sendToTool(PVP.instance.tool, "sv_setTeam", {player = params.player, team = params[2]})
     elseif params[1] == "/noteam" then
         sm.event.sendToTool(PVP.instance.tool, "sv_setTeam", {player = params.player, team = nil})
+    elseif params[1] == "/lifesteal" then
+        sm.event.sendToTool(PVP.instance.tool, "sv_setLifeSteal", {player = params.player, team = nil})
     else
         oldWorldEvent(world, callback, params)
     end
@@ -554,7 +549,13 @@ local function meleeAttackHook(uuid, damage, origin, directionRange, source, del
 
     if getGamemode() == "survival" and type(source) ~= "Player" then return end
 
-    sm.event.sendToTool(PVP.instance.tool, sm.isServerMode() and "sv_sendAttack" or "cl_sendAttack", damage)
+    local params = {
+        victim = char:getPlayer(),
+        attacker = source,
+        damage = damage
+    }
+
+    sm.event.sendToTool(PVP.instance.tool, sm.isServerMode() and "sv_sendAttack" or "cl_sendAttack", params)
 end
 
 sm.melee.meleeAttack = meleeAttackHook
@@ -584,7 +585,7 @@ function getGamemode()
         return gameMode
     end
     --TechnologicNick is a life-saver!
-    gameMode = "unknown"-- yo dats me
+    gameMode = "unknown"
     if sm.event.sendToGame("cl_onClearConfirmButtonClick", {}) then
         gameMode = "creative"
     elseif sm.event.sendToGame("sv_e_setWarehouseRestrictions", {}) then
@@ -594,36 +595,4 @@ function getGamemode()
     end
 
     return gameMode
-end
-
-local function hslToHex(h, s, l, a)
-    local r, g, b
-
-    h = (h / 255)
-    s = (s / 100)
-    l = (l / 100)
-
-    if s == 0 then
-        r, g, b = l, l, l -- achromatic
-    else
-        local function hue2rgb(p, q, t)
-            if t < 0   then t = t + 1 end
-            if t > 1   then t = t - 1 end
-            if t < 1/6 then return p + (q - p) * 6 * t end
-            if t < 1/2 then return q end
-            if t < 2/3 then return p + (q - p) * (2/3 - t) * 6 end
-            return p
-        end
-
-        local q
-        if l < 0.5 then q = l * (1 + s) else q = l + s - l * s end
-        local p = 2 * l - q
-
-        r = hue2rgb(p, q, h + 1/3)
-        g = hue2rgb(p, q, h)
-        b = hue2rgb(p, q, h - 1/3)
-    end
-
-    if not a then a = 1 end
-    return {r = string.format("%x", r * 255),g = string.format("%x", g * 255),b = string.format("%x", b * 255),a = string.format("%x", a * 255)}
 end
