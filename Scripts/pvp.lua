@@ -334,6 +334,8 @@ function PVP:client_onFixedUpdate()
             end
         end
     end
+
+    self:cl_updateNameTags()
 end
 
 function PVP:client_onUpdate()
@@ -370,26 +372,20 @@ function PVP:client_onClientDataUpdate(data)
     if self.cl.nameTags ~= data.nameTags then
         self.cl.nameTags = data.nameTags
         sm.gui.chatMessage("Player Names: " .. (self.cl.nameTags and "On" or "Off"))
-
-        self:cl_updateNameTags()
     end
 
     if self.cl.team ~= data.teams[sm.localPlayer.getPlayer().id] then
         self.cl.team = data.teams[sm.localPlayer.getPlayer().id]
         sm.gui.chatMessage(string.format("Your Team: %s", self.cl.team or "none"))
-
-        self:cl_updateNameTags()
     end
     self.cl.teams = data.teams
-
-    --TODO adjust nametags by team
 end
 
 function PVP:cl_updateNameTags()
     local localPlayer = sm.localPlayer.getPlayer()
 
     for _, player in ipairs(sm.player.getAllPlayers()) do
-        if player.character then
+        if player.character and player ~= localPlayer then
             local sameTeam = self.cl.teams[localPlayer.id] == self.cl.teams[player.id]
             local nameTag = self.cl.nameTags and (sameTeam or self.cl.team == nil)
             player.character:setNameTag(nameTag and player.name or "")
