@@ -485,6 +485,11 @@ sm.game.bindChatCommand = bindCommandHook
 local oldWorldEvent = sm.event.sendToWorld
 
 local function worldEventHook(world, callback, params)
+    if not params then
+        oldWorldEvent(world, callback, params)
+        return
+    end
+
     if params[1] == "/pvp" then
         sm.event.sendToTool(PVP.instance.tool, "sv_togglePVP")
     elseif params[1] == "/setspawn" then
@@ -554,14 +559,18 @@ sm.physics.explode = explodeHook
 
 --helper functions
 function getGamemode()
+    if gameMode then
+        return gameMode
+    end
     --TechnologicNick is a life-saver!
+    gameMode = "unknown"
     if sm.event.sendToGame("cl_onClearConfirmButtonClick", {}) then
-        return "creative"
+        gameMode = "creative"
     elseif sm.event.sendToGame("sv_e_setWarehouseRestrictions", {}) then
-        return "survival"
+        gameMode = "survival"
     elseif sm.event.sendToGame("server_getLevelUuid", {}) then
-        return "challenge"
+        gameMode = "challenge"
     end
 
-    return "unknown"
+    return gameMode
 end
