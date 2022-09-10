@@ -384,7 +384,9 @@ function PVP:client_onUpdate()
 
     if self.cl then
         if self.cl.death then
+            print(self.cl.death)
             sm.gui.setInteractionText("Respawn in " .. tostring(self.cl.death))
+            sm.gui.setProgressFraction( math.abs(self.cl.death-10)/10 )
         end
 
         if self.cl.hud and survivalMode then
