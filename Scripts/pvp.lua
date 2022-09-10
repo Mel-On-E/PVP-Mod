@@ -20,6 +20,38 @@ function PVP:server_onCreate()
     self:sv_init()
 end
 
+local function hslToHex(h, s, l, a)
+    local r, g, b
+
+    h = (h / 255)
+    s = (s / 100)
+    l = (l / 100)
+
+    if s == 0 then
+        r, g, b = l, l, l -- achromatic
+    else
+        local function hue2rgb(p, q, t)
+            if t < 0   then t = t + 1 end
+            if t > 1   then t = t - 1 end
+            if t < 1/6 then return p + (q - p) * 6 * t end
+            if t < 1/2 then return q end
+            if t < 2/3 then return p + (q - p) * (2/3 - t) * 6 end
+            return p
+        end
+
+        local q
+        if l < 0.5 then q = l * (1 + s) else q = l + s - l * s end
+        local p = 2 * l - q
+
+        r = hue2rgb(p, q, h + 1/3)
+        g = hue2rgb(p, q, h)
+        b = hue2rgb(p, q, h - 1/3)
+    end
+
+    if not a then a = 1 end
+    return {r = string.format("%x", r * 255),g = string.format("%x", g * 255),b = string.format("%x", b * 255),a = string.format("%x", a * 255)}
+end
+
 function PVP:sv_init()
     if PVP.instance and PVP.instance ~= self then return end
 
@@ -366,7 +398,7 @@ function PVP:client_onUpdate()
 
     if self.cl then
         if self.cl.death then
-            sm.gui.setInteractionText("Respawn in " .. tostring(self.cl.death))
+            sm.gui.setInteractionText("Respawn in " .. tostring(self.cl.death).." "..self.deathMessage)
             sm.gui.setProgressFraction( math.abs(self.cl.death-10)/10 )
         end
 
@@ -435,6 +467,8 @@ function PVP:cl_death()
     if self.cl then
         self.cl.death = respawnTime
     end
+    local c=hslToHex(math.random()*254,100,90)
+    self.deathMessage = "#".. c.r .. c.g .. c.b ..randomDeathMessage()
 end
 
 function PVP:cl_damageSound(params)
@@ -511,7 +545,8 @@ local function bindCommandHook(command, params, callback, help)
             oldBindCommand("/pvp", {}, "cl_onChatCommand", "Toggle PVP mod")
             oldBindCommand("/nametags", {}, "cl_onChatCommand", "Toggles player name tags")
             oldBindCommand("/lifesteal", { { "bool", "enable", true } }, "cl_onChatCommand", "gains health after kill")
-            oldBindCommand("/maxhealth", { { "int", "max", false } }, "cl_onChatCommand", "gains health after kill")
+            oldBindCommand("/maxhealth", { { "int", "max", false } }, "cl_onChatCommand", "change the max health")
+            oldBindCommand("/respawntime", { { "int", "time", false } }, "cl_onChatCommand", "change the respawn timer")
         end
         
         if getGamemode() ~= "survival" then
@@ -532,6 +567,7 @@ sm.game.bindChatCommand = bindCommandHook
 local oldWorldEvent = sm.event.sendToWorld
 
 local function worldEventHook(world, callback, params)
+    if type(callback) == "player" then return end
     if not params then
         oldWorldEvent(world, callback, params)
         return
@@ -553,6 +589,9 @@ local function worldEventHook(world, callback, params)
     elseif params[1] == "/maxhealth" then
         sm.event.sendToTool(PVP.instance.tool, "sv_showMessage","maxHP was set from "..tostring(maxHP).." to "..tostring(params[2]))
         maxHP=params[2]
+    elseif params[1] == "/respawntime" then
+        sm.event.sendToTool(PVP.instance.tool, "sv_showMessage","respawntime was set from "..tostring(respawnTime).." to "..tostring(params[2]))
+        respawnTime=params[2]
     else
         oldWorldEvent(world, callback, params)
     end
@@ -602,8 +641,6 @@ end
 
 sm.physics.explode = explodeHook
 
-
-
 --helper functions
 function getGamemode()
     if gameMode then
@@ -622,34 +659,7 @@ function getGamemode()
     return gameMode
 end
 
-local function hslToHex(h, s, l, a)
-    local r, g, b
-
-    h = (h / 255)
-    s = (s / 100)
-    l = (l / 100)
-
-    if s == 0 then
-        r, g, b = l, l, l -- achromatic
-    else
-        local function hue2rgb(p, q, t)
-            if t < 0   then t = t + 1 end
-            if t > 1   then t = t - 1 end
-            if t < 1/6 then return p + (q - p) * 6 * t end
-            if t < 1/2 then return q end
-            if t < 2/3 then return p + (q - p) * (2/3 - t) * 6 end
-            return p
-        end
-
-        local q
-        if l < 0.5 then q = l * (1 + s) else q = l + s - l * s end
-        local p = 2 * l - q
-
-        r = hue2rgb(p, q, h + 1/3)
-        g = hue2rgb(p, q, h)
-        b = hue2rgb(p, q, h - 1/3)
-    end
-
-    if not a then a = 1 end
-    return {r = string.format("%x", r * 255),g = string.format("%x", g * 255),b = string.format("%x", b * 255),a = string.format("%x", a * 255)}
+function randomDeathMessage()
+    messages = {"try doing better","what a shame","fr?"}
+    return messages[math.random(#messages)]
 end
