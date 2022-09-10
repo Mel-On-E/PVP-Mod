@@ -49,78 +49,51 @@ function PVP:server_onRefresh()
     self:sv_init()
 end
 
-function PVP:client_onFixedUpdate()
-    if not self.tool:isLocal() then return end
+function PVP:server_onFixedUpdate()
+    if PVP.instance ~= self then return end
 
     if getGamemode() == "survival" then
         survivalMode = true
     end
 
-    if self.cl.death and sm.game.getCurrentTick()%40 == 0 then
-        self.cl.death = math.max(self.cl.death-1, 0)
-        
-        if self.cl.death == 0 then
-            self.cl.death = nil
+    local function create_hitbox(player)
+        self.sv.saved.playerStats[player.id] = self.sv.saved.playerStats[player.id] or {hp = maxHP}
+
+        local hitbox = {}
+        hitbox.player = player
+        hitbox.trigger = sm.areaTrigger.createBox(hitboxSize/2, player.character.worldPosition)
+        hitbox.trigger:bindOnProjectile("sv_hitboxOnProjectile", self)
+
+        return hitbox
+    end
+
+    update_hitbox_list(self.sv.hitboxes, create_hitbox)
+
+    update_hitboxes(self.sv.hitboxes)
+
+    if self.sv.saved.settings.pvp and not survivalMode and sm.game.getCurrentTick() % 40 == 0 then
+        for _, player in pairs(sm.player.getAllPlayers()) do
+            self:sv_updateHP({player = player, change = healthRegenPerSecond})
         end
     end
 
-    if showHitboxes then
-        local function create_hitbox(player)
-            local hitbox = {}
-            hitbox.player = player
+    for k, respawn in pairs(self.sv.respawns) do
+        if respawn.time < sm.game.getCurrentTick() then
+            local spawnParams = self.sv.saved.spawnPoints[respawn.player.id] or {
+                pos = sm.vec3.one(),
+                yaw = 0,
+                pitch = 0 }
 
-            hitbox.effect = sm.effect.createEffect("ShapeRenderable")
-            hitbox.effect:setParameter("uuid", sm.uuid.new("5f41af56-df4c-4837-9b3c-10781335757f"))
-            hitbox.effect:setParameter("color", sm.color.new(1,1,1))
-            hitbox.effect:setScale(hitboxSize)
-            hitbox.effect:start()
+            local newChar = sm.character.createCharacter( respawn.player, respawn.player:getCharacter():getWorld(), spawnParams.pos, spawnParams.yaw, spawnParams.pitch )
+            respawn.player:setCharacter(newChar)
 
-            return hitbox
+            sm.effect.playEffect( "Characterspawner - Activate", spawnParams.pos )
+
+            self.sv.respawns[k] = nil
+
+            self.sv.saved.playerStats[respawn.player.id].hp = maxHP
+            self.storage:save(self.sv.saved)
         end
-
-        local function destroy_hitbox(hitbox)
-            if hitbox and hitbox.effect and sm.exists(hitbox.effect) then --just wanna make sure, bro
-                hitbox.effect:destroy()
-            end
-        end
-
-        update_hitbox_list(self.cl.hitboxes, create_hitbox, destroy_hitbox)
-
-        update_hitboxes(self.cl.hitboxes)
-    end
-
-    --detecting player melee attacks via animation
-    local char = sm.localPlayer.getPlayer().character
-    if char and getGamemode() ~= "survival" then
-        local prevAttacks = self.cl.meleeAttacks
-
-        self.cl.meleeAttacks = {sledgehammer_attack1 = 0, sledgehammer_attack2 = 0}
-        for _, anim in ipairs(char:getActiveAnimations()) do
-            if anim.name == "sledgehammer_attack1" or anim.name == "sledgehammer_attack2" then
-                self.cl.meleeAttacks[anim.name] = prevAttacks[anim.name] + 1
-            end
-        end
-
-        local hitDelay = 7
-        if self.cl.meleeAttacks.sledgehammer_attack1 == hitDelay or self.cl.meleeAttacks.sledgehammer_attack2 == hitDelay then
-            --new melee attack
-            local Range = 3.0
-            local Damage = 20
-
-            local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
-            if success then
-                if result.type == "character" and result:getCharacter():getPlayer() then
-                    cl_sendAttack()
-                    -- self.network:sendToServer("sv_sendAttack")
-                end
-            end
-        end
-    end
-
-    self:cl_updateNameTags()
-
-    if self.hitOpened and self.hitOpened + 19 > sm.game.getCurrentTick() then
-        self.hitPing:close()
     end
 end
 
@@ -170,12 +143,14 @@ function update_hitboxes(hitboxes)
     end
 end
 
-function PVP:sv_updateHP(params,caller)if caller then return end
+function PVP:sv_updateHP(params,caller)
+    if caller then return end
     if not self.sv.saved.settings.pvp then return end
 
     local player = params.player
     local change = params.change
     local attacker = params.attacker
+    local Type = params.type
 
     if (not params.ignoreSound) and (change < 0 and not player.character:isDowned()) then
         self.network:sendToClients( "cl_damageSound", { event = "impact", pos = player.character.worldPosition, damage = -change * 0.01 } )
@@ -204,8 +179,10 @@ function PVP:sv_updateHP(params,caller)if caller then return end
             if self.sv.saved.playerStats[player.id].hp == 0 then
                 if type( attacker ) == "Player" then
                     self.network:sendToClients( "cl_n_showMessage", "#ff0000" .. player.name .. "#ffffff was pwned by #00ffff" .. attacker.name )
+                elseif Type=="explode" then
+                    self.network:sendToClients( "cl_n_showMessage", "#ff0000".. player.name .. "#ffffff killed them self" )
                 else
-                    self.network:sendToClients( "cl_n_showMessage", "#ff0000".. player.name .. " #ffffffdied " )
+                    self.network:sendToClients( "cl_n_showMessage", "#ff0000".. player.name .. "#ffffff died " )
                 end
 
                 player.character:setTumbling(true)
@@ -221,7 +198,8 @@ function PVP:sv_updateHP(params,caller)if caller then return end
 end
 
 function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity, _, attacker, damage, userData, hitNormal, projectileUuid )
-    -- if type(trigger) == "player" then return
+    -- if type(trigger) == "player" then return end
+
     if not self.sv.saved.settings.pvp then return false end
     
     if isAnyOf( projectileUuid, g_potatoProjectiles ) then
@@ -249,7 +227,8 @@ function PVP:sv_getHitboxOwner(triggerID)
     return owner
 end
 
-function PVP:sv_attack(params,caller)if caller then return end
+function PVP:sv_attack(params,caller)
+    if caller then return end
     local victim = params.victim
     local attacker = params.attacker
     local damage = params.damage
@@ -278,7 +257,7 @@ function PVP:sv_attack(params,caller)if caller then return end
     end
 end
 
-function PVP:sv_sendAttack( params, damage, attacker )
+function PVP:sv_sendAttack(damage, attacker)
     local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
     if success then
         victim = result:getCharacter():getPlayer()
@@ -367,12 +346,15 @@ function PVP:client_onFixedUpdate()
             local Range = 3.0
             local Damage = 20
 
-            local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
-            if success then
-                if result.type == "character" and result:getCharacter():getPlayer() then
-                    self.network:sendToServer("sv_sendAttack", {victim = result:getCharacter():getPlayer(), attacker = sm.localPlayer.getPlayer(), damage = Damage, ignoreSound = true})
-                end
-            end
+            -- local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
+            -- if success then
+            --     self.network:sendToServer("sv_sendAttack", {victim = result:getCharacter():getPlayer(), attacker = sm.localPlayer.getPlayer(), damage = Damage, ignoreSound = true})
+            --     if result.type == "character" and result:getCharacter():getPlayer() then
+                    
+            --     end
+            -- end
+
+            self.network:sendToServer("cl_sendAttack", Damage)
         end
     end
 
@@ -384,7 +366,6 @@ function PVP:client_onUpdate()
 
     if self.cl then
         if self.cl.death then
-            print(self.cl.death)
             sm.gui.setInteractionText("Respawn in " .. tostring(self.cl.death))
             sm.gui.setProgressFraction( math.abs(self.cl.death-10)/10 )
         end
@@ -447,7 +428,7 @@ function PVP:cl_updateHealthBar(hp)
 end
 
 function PVP:cl_n_showMessage(msg)
-	sm.gui.chatMessage(msg)
+    sm.gui.chatMessage(msg)
 end
 
 function PVP:cl_death()
@@ -464,20 +445,8 @@ function PVP:cl_msg(msg)
     sm.gui.chatMessage(msg)
 end
 
-function PVP:cl_sendAttack( damage )
+function PVP:cl_sendAttack(damage)
     self.network:sendToServer("sv_sendAttack", damage or 20)
-end
-
-function PVP:playerHit( params )-- victim damage
-    local gui = self.hitPing
-    local color = hslToHex(math.random()*254, 100, damage/100*255)
-
-    print("COLOR COLOR COLOR",color)
-
-    gui:setWorldPosition(params.victim.character.worldPosition)
-    gui:setText("#"..color..params.damage)
-    gui:open()
-    self.hitOpened = sm.game.getCurrentTick()
 end
 
 function PVP:sv_togglePVP(_,caller)
@@ -497,8 +466,7 @@ function PVP:sv_setSpawnpoint(player,caller)
     self.network:sendToClient(player, "cl_msg", "spawnpoint set")
 end
 
-function PVP:sv_toggleNameTags(_,caller)
-    if caller then return end
+function PVP:sv_toggleNameTags()
     self.sv.saved.settings.nameTags = not self.sv.saved.settings.nameTags
     self.storage:save(self.sv.saved)
 
@@ -521,6 +489,17 @@ function PVP:sv_setLifeSteal(params,caller)
     self.network:setClientData(self.sv.saved.settings)
 end
 
+function PVP:sv_showMessageLifesteal(params,caller)
+    if caller then return end
+
+    self.network:sendToClients( "cl_n_showMessage", "lifesteal was set to "..tostring(self.sv.saved.settings.lifeSteal) )
+end
+
+function PVP:sv_showMessage(message,caller)
+    if caller then return end
+
+    self.network:sendToClients( "cl_n_showMessage", message )
+end
 
 --HOOKS
 local oldBindCommand = sm.game.bindChatCommand
@@ -532,6 +511,7 @@ local function bindCommandHook(command, params, callback, help)
             oldBindCommand("/pvp", {}, "cl_onChatCommand", "Toggle PVP mod")
             oldBindCommand("/nametags", {}, "cl_onChatCommand", "Toggles player name tags")
             oldBindCommand("/lifesteal", { { "bool", "enable", true } }, "cl_onChatCommand", "gains health after kill")
+            oldBindCommand("/maxhealth", { { "int", "max", false } }, "cl_onChatCommand", "gains health after kill")
         end
         
         if getGamemode() ~= "survival" then
@@ -569,6 +549,10 @@ local function worldEventHook(world, callback, params)
         sm.event.sendToTool(PVP.instance.tool, "sv_setTeam", {player = params.player, team = nil})
     elseif params[1] == "/lifesteal" then
         sm.event.sendToTool(PVP.instance.tool, "sv_setLifeSteal", {player = params.player, team = nil})
+        sm.event.sendToTool(PVP.instance.tool, "sv_showMessageLifesteal")
+    elseif params[1] == "/maxhealth" then
+        sm.event.sendToTool(PVP.instance.tool, "sv_showMessage","maxHP was set from "..tostring(maxHP).." to "..tostring(params[2]))
+        maxHP=params[2]
     else
         oldWorldEvent(world, callback, params)
     end
@@ -611,7 +595,7 @@ local function explodeHook(position, level, destructionRadius, impulseRadius, ma
 
     for _, character in ipairs(sm.physics.getSphereContacts(position, destructionRadius).characters) do
         if character:getPlayer() then
-            sm.event.sendToTool(PVP.instance.tool, "sv_updateHP", {player = character:getPlayer(), change = -level*2})
+            sm.event.sendToTool(PVP.instance.tool, "sv_updateHP", {player = character:getPlayer(), change = -level*2,type="explode"})
         end
     end
 end
