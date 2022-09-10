@@ -6,10 +6,11 @@ dofile( "$SURVIVAL_DATA/Scripts/util.lua" )
 PVP = class()
 PVP.instance = nil
 
-local hitboxSize = sm.vec3.new(3, 3, 5)/4
+local hitboxSize = sm.vec3.new(2.3, 2.3, 5)/4
 local healthRegenPerSecond = 1
 local maxHP = 100
 local respawnTime = 10
+local deathmessage = false
 
 local showHitboxes = false --DEBUG
 local survivalMode = false
@@ -18,6 +19,10 @@ local g_cl_tool
 
 function PVP:server_onCreate()
     self:sv_init()
+
+    self.sv.saved.playerStats = {}
+    self.sv.saved.spawnPoints = {}
+    self.storage:save(self.sv.saved)
 end
 
 local function hslToHex(h, s, l, a)
@@ -79,6 +84,9 @@ end
 
 function PVP:server_onRefresh()
     self:sv_init()
+    self.sv.saved.playerStats = {}
+    self.sv.saved.spawnPoints = {}
+    self.storage:save(self.sv.saved)
 end
 
 function PVP:server_onFixedUpdate()
@@ -221,7 +229,7 @@ function PVP:sv_updateHP(params,caller)
                 player.character:setDowned(true)
 
                 self.sv.respawns[#self.sv.respawns+1] = {player = player, time = sm.game.getCurrentTick() + respawnTime*40}
-                self.network:sendToClient(player, "cl_death")
+                self.network:sendToClient( player, "cl_death", {deathmessage=deathmessage,respawnTime=respawnTime} )
             end
 
             self.storage:save(self.sv.saved)
@@ -230,8 +238,6 @@ function PVP:sv_updateHP(params,caller)
 end
 
 function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity, _, attacker, damage, userData, hitNormal, projectileUuid )
-    -- if type(trigger) == "player" then return end
-
     if not self.sv.saved.settings.pvp then return false end
     
     if isAnyOf( projectileUuid, g_potatoProjectiles ) then
@@ -242,8 +248,10 @@ function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity,
     
     local owner = self:sv_getHitboxOwner(trigger.id)
 
-    self:sv_attack({victim = owner, attacker = attacker, damage = damage})
+    damage=damage+(hitPos.z - owner.character.worldPosition.z+owner.character:getHeight()/2)*1.3
 
+    self:sv_attack({victim = owner, attacker = attacker, damage = damage,hitPos=hitPos})
+    print(owner.character:getRadius()*8)
     return false
 end
 
@@ -292,6 +300,7 @@ end
 function PVP:sv_sendAttack(damage, attacker)
     local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
     if success then
+        print(result)
         victim = result:getCharacter():getPlayer()
         sm.event.sendToTool(PVP.instance.tool, "sv_attack", {victim = victim, attacker = attacker, damage = damage, ignoreSound = true})
         
@@ -398,7 +407,7 @@ function PVP:client_onUpdate()
 
     if self.cl then
         if self.cl.death then
-            sm.gui.setInteractionText("Respawn in " .. tostring(self.cl.death).." "..self.deathMessage)
+            sm.gui.setInteractionText("Respawn in " .. tostring(self.cl.death)..(deathmessage and (" "..self.deathMessage) or ""))
             sm.gui.setProgressFraction( math.abs(self.cl.death-10)/10 )
         end
 
@@ -463,12 +472,15 @@ function PVP:cl_n_showMessage(msg)
     sm.gui.chatMessage(msg)
 end
 
-function PVP:cl_death()
+function PVP:cl_death(params)
     if self.cl then
         self.cl.death = respawnTime
     end
-    local c=hslToHex(math.random()*254,100,90)
-    self.deathMessage = "#".. c.r .. c.g .. c.b ..randomDeathMessage()
+    respawnTime=respawnTime
+    if params.deathmessage then
+        local c=hslToHex(math.random()*254,100,90)
+        self.deathMessage = "#".. c.r .. c.g .. c.b ..randomDeathMessage()
+    end
 end
 
 function PVP:cl_damageSound(params)
@@ -547,6 +559,7 @@ local function bindCommandHook(command, params, callback, help)
             oldBindCommand("/lifesteal", { { "bool", "enable", true } }, "cl_onChatCommand", "gains health after kill")
             oldBindCommand("/maxhealth", { { "int", "max", false } }, "cl_onChatCommand", "change the max health")
             oldBindCommand("/respawntime", { { "int", "time", false } }, "cl_onChatCommand", "change the respawn timer")
+            oldBindCommand("/deathmessage", { { "bool", "enable", true } }, "cl_onChatCommand", "enable or disable the random death message")
         end
         
         if getGamemode() ~= "survival" then
@@ -590,8 +603,12 @@ local function worldEventHook(world, callback, params)
         sm.event.sendToTool(PVP.instance.tool, "sv_showMessage","maxHP was set from "..tostring(maxHP).." to "..tostring(params[2]))
         maxHP=params[2]
     elseif params[1] == "/respawntime" then
-        sm.event.sendToTool(PVP.instance.tool, "sv_showMessage","respawntime was set from "..tostring(respawnTime).." to "..tostring(params[2]))
+        sm.event.sendToTool(PVP.instance.tool, "sv_showMessage","respawn time was set from "..tostring(respawnTime).." to "..tostring(params[2]))
         respawnTime=params[2]
+    elseif params[1] == "/deathmessage" then
+        sm.event.sendToTool(PVP.instance.tool, "sv_showMessage","death message was set to "..tostring(params[2] or not deathmessage))
+        deathmessage=params[2] or not deathmessage
+        print(deathmessage)
     else
         oldWorldEvent(world, callback, params)
     end
@@ -599,6 +616,8 @@ end
 
 sm.event.sendToWorld = worldEventHook
 
+
+--wouldnt server_onMelee work better?
 local oldMeleeAttack = sm.melee.meleeAttack
 
 local function meleeAttackHook(uuid, damage, origin, directionRange, source, delay, power)
@@ -660,6 +679,6 @@ function getGamemode()
 end
 
 function randomDeathMessage()
-    messages = {"try doing better","what a shame","fr?"}
+    messages = {"try doing better..","what a shame!","fr?","skill issue","did you even try?","what whas that?","bruh","bruh moment","I betted money on you!","I thought you would at least try."}
     return messages[math.random(#messages)]
 end
