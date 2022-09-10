@@ -49,51 +49,78 @@ function PVP:server_onRefresh()
     self:sv_init()
 end
 
-function PVP:server_onFixedUpdate()
-    if PVP.instance ~= self then return end
+function PVP:client_onFixedUpdate()
+    if not self.tool:isLocal() then return end
 
     if getGamemode() == "survival" then
         survivalMode = true
     end
 
-    local function create_hitbox(player)
-        self.sv.saved.playerStats[player.id] = self.sv.saved.playerStats[player.id] or {hp = maxHP}
-
-        local hitbox = {}
-        hitbox.player = player
-        hitbox.trigger = sm.areaTrigger.createBox(hitboxSize/2, player.character.worldPosition)
-        hitbox.trigger:bindOnProjectile("sv_hitboxOnProjectile", self)
-
-        return hitbox
-    end
-
-    update_hitbox_list(self.sv.hitboxes, create_hitbox)
-
-    update_hitboxes(self.sv.hitboxes)
-
-    if self.sv.saved.settings.pvp and not survivalMode and sm.game.getCurrentTick() % 40 == 0 then
-        for _, player in pairs(sm.player.getAllPlayers()) do
-            self:sv_updateHP({player = player, change = healthRegenPerSecond})
+    if self.cl.death and sm.game.getCurrentTick()%40 == 0 then
+        self.cl.death = math.max(self.cl.death-1, 0)
+        
+        if self.cl.death == 0 then
+            self.cl.death = nil
         end
     end
 
-    for k, respawn in pairs(self.sv.respawns) do
-        if respawn.time < sm.game.getCurrentTick() then
-            local spawnParams = self.sv.saved.spawnPoints[respawn.player.id] or {
-                pos = sm.vec3.one(),
-                yaw = 0,
-                pitch = 0 }
+    if showHitboxes then
+        local function create_hitbox(player)
+            local hitbox = {}
+            hitbox.player = player
 
-            local newChar = sm.character.createCharacter( respawn.player, respawn.player:getCharacter():getWorld(), spawnParams.pos, spawnParams.yaw, spawnParams.pitch )
-            respawn.player:setCharacter(newChar)
+            hitbox.effect = sm.effect.createEffect("ShapeRenderable")
+            hitbox.effect:setParameter("uuid", sm.uuid.new("5f41af56-df4c-4837-9b3c-10781335757f"))
+            hitbox.effect:setParameter("color", sm.color.new(1,1,1))
+            hitbox.effect:setScale(hitboxSize)
+            hitbox.effect:start()
 
-            sm.effect.playEffect( "Characterspawner - Activate", spawnParams.pos )
-
-            self.sv.respawns[k] = nil
-
-            self.sv.saved.playerStats[respawn.player.id].hp = maxHP
-            self.storage:save(self.sv.saved)
+            return hitbox
         end
+
+        local function destroy_hitbox(hitbox)
+            if hitbox and hitbox.effect and sm.exists(hitbox.effect) then --just wanna make sure, bro
+                hitbox.effect:destroy()
+            end
+        end
+
+        update_hitbox_list(self.cl.hitboxes, create_hitbox, destroy_hitbox)
+
+        update_hitboxes(self.cl.hitboxes)
+    end
+
+    --detecting player melee attacks via animation
+    local char = sm.localPlayer.getPlayer().character
+    if char and getGamemode() ~= "survival" then
+        local prevAttacks = self.cl.meleeAttacks
+
+        self.cl.meleeAttacks = {sledgehammer_attack1 = 0, sledgehammer_attack2 = 0}
+        for _, anim in ipairs(char:getActiveAnimations()) do
+            if anim.name == "sledgehammer_attack1" or anim.name == "sledgehammer_attack2" then
+                self.cl.meleeAttacks[anim.name] = prevAttacks[anim.name] + 1
+            end
+        end
+
+        local hitDelay = 7
+        if self.cl.meleeAttacks.sledgehammer_attack1 == hitDelay or self.cl.meleeAttacks.sledgehammer_attack2 == hitDelay then
+            --new melee attack
+            local Range = 3.0
+            local Damage = 20
+
+            local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
+            if success then
+                if result.type == "character" and result:getCharacter():getPlayer() then
+                    cl_sendAttack()
+                    -- self.network:sendToServer("sv_sendAttack")
+                end
+            end
+        end
+    end
+
+    self:cl_updateNameTags()
+
+    if self.hitOpened and self.hitOpened + 19 > sm.game.getCurrentTick() then
+        self.hitPing:close()
     end
 end
 
@@ -251,8 +278,14 @@ function PVP:sv_attack(params,caller)if caller then return end
     end
 end
 
-function PVP:sv_sendAttack(params,caller)if caller then return end
-    sm.event.sendToTool(PVP.instance.tool, "sv_attack", params)
+function PVP:sv_sendAttack( params, damage, attacker )
+    local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
+    if success then
+        victim = result:getCharacter():getPlayer()
+        sm.event.sendToTool(PVP.instance.tool, "sv_attack", {victim = victim, attacker = attacker, damage = damage, ignoreSound = true})
+        
+        self.network.sendToClient(attacker,"playerHit",{victim=victim,damage=damage})
+    end
 end
 
 function PVP:client_onCreate()
@@ -429,8 +462,20 @@ function PVP:cl_msg(msg)
     sm.gui.chatMessage(msg)
 end
 
-function PVP:cl_sendAttack(params)
-    self.network:sendToServer("sv_sendAttack", params)
+function PVP:cl_sendAttack( damage )
+    self.network:sendToServer("sv_sendAttack", damage or 20)
+end
+
+function PVP:playerHit( params )-- victim damage
+    local gui = self.hitPing
+    local color = hslToHex(math.random()*254, 100, damage/100*255)
+
+    print("COLOR COLOR COLOR",color)
+
+    gui:setWorldPosition(params.victim.character.worldPosition)
+    gui:setText("#"..color..params.damage)
+    gui:open()
+    self.hitOpened = sm.game.getCurrentTick()
 end
 
 function PVP:sv_togglePVP(_,caller)
@@ -549,13 +594,7 @@ local function meleeAttackHook(uuid, damage, origin, directionRange, source, del
 
     if getGamemode() == "survival" and type(source) ~= "Player" then return end
 
-    local params = {
-        victim = char:getPlayer(),
-        attacker = source,
-        damage = damage
-    }
-
-    sm.event.sendToTool(PVP.instance.tool, sm.isServerMode() and "sv_sendAttack" or "cl_sendAttack", params)
+    sm.event.sendToTool(PVP.instance.tool, sm.isServerMode() and "sv_sendAttack" or "cl_sendAttack", damage)
 end
 
 sm.melee.meleeAttack = meleeAttackHook
@@ -595,4 +634,36 @@ function getGamemode()
     end
 
     return gameMode
+end
+
+local function hslToHex(h, s, l, a)
+    local r, g, b
+
+    h = (h / 255)
+    s = (s / 100)
+    l = (l / 100)
+
+    if s == 0 then
+        r, g, b = l, l, l -- achromatic
+    else
+        local function hue2rgb(p, q, t)
+            if t < 0   then t = t + 1 end
+            if t > 1   then t = t - 1 end
+            if t < 1/6 then return p + (q - p) * 6 * t end
+            if t < 1/2 then return q end
+            if t < 2/3 then return p + (q - p) * (2/3 - t) * 6 end
+            return p
+        end
+
+        local q
+        if l < 0.5 then q = l * (1 + s) else q = l + s - l * s end
+        local p = 2 * l - q
+
+        r = hue2rgb(p, q, h + 1/3)
+        g = hue2rgb(p, q, h)
+        b = hue2rgb(p, q, h - 1/3)
+    end
+
+    if not a then a = 1 end
+    return {r = string.format("%x", r * 255),g = string.format("%x", g * 255),b = string.format("%x", b * 255),a = string.format("%x", a * 255)}
 end
