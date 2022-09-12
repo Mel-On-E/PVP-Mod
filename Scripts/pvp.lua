@@ -19,10 +19,11 @@ local g_cl_tool
 
 function PVP:server_onCreate()
     self:sv_init()
-
-    self.sv.saved.playerStats = {}
-    self.sv.saved.spawnPoints = {}
-    self.storage:save(self.sv.saved)
+    if self.sv and self.sv.saved then
+        self.sv.saved.playerStats = {}
+        self.sv.saved.spawnPoints = {}
+        self.storage:save(self.sv.saved)
+    end
 end
 
 local function hslToHex(h, s, l, a)
@@ -84,9 +85,11 @@ end
 
 function PVP:server_onRefresh()
     self:sv_init()
-    self.sv.saved.playerStats = {}
-    self.sv.saved.spawnPoints = {}
-    self.storage:save(self.sv.saved)
+    if self.sv and self.sv.saved then
+        self.sv.saved.playerStats = {}
+        self.sv.saved.spawnPoints = {}
+        self.storage:save(self.sv.saved)
+    end
 end
 
 function PVP:server_onFixedUpdate()
@@ -229,7 +232,7 @@ function PVP:sv_updateHP(params,caller)
                 player.character:setDowned(true)
 
                 self.sv.respawns[#self.sv.respawns+1] = {player = player, time = sm.game.getCurrentTick() + respawnTime*40}
-                self.network:sendToClient( player, "cl_death", {deathmessage=deathmessage,respawnTime=respawnTime} )
+                self.network:sendToClient( player, "cl_death", {deathmessage=deathmessage, respawnTime=respawnTime} )
             end
 
             self.storage:save(self.sv.saved)
@@ -246,12 +249,13 @@ function PVP.sv_hitboxOnProjectile( self, trigger, hitPos, hitTime, hitVelocity,
         return false
     end
     
-    local owner = self:sv_getHitboxOwner(trigger.id)
+    local victim = self:sv_getHitboxOwner(trigger.id)
+    if victim then
+        damage=damage+(hitPos.z - victim.character.worldPosition.z+victim.character:getHeight()/2)*1.3
 
-    damage=damage+(hitPos.z - owner.character.worldPosition.z+owner.character:getHeight()/2)*1.3
-
-    self:sv_attack({victim = owner, attacker = attacker, damage = damage,hitPos=hitPos})
-    print(owner.character:getRadius()*8)
+        self:sv_attack({victim = victim, attacker = attacker, damage = damage, hitPos=hitPos})
+        print(damage)
+    end
     return false
 end
 
@@ -263,7 +267,7 @@ function PVP:sv_getHitboxOwner(triggerID)
             break
         end
     end
-    assert(owner, "Couldn't find owner of hitbox")
+    -- assert(owner, "Couldn't find owner of hitbox")
     return owner
 end
 
@@ -284,7 +288,7 @@ function PVP:sv_attack(params,caller)
             end
         end
 
-        if not friendlyFire then
+        if not friendlyFire and not victim.character:isDowned() then
             self:sv_updateHP({player = victim, change = -damage, attacker = attacker, ignoreSound = params.ignoreSound})
             if self.sv.saved.settings.lifeSteal then
                 local VictimHP = self.sv.saved.playerStats[victim.id].hp
@@ -293,19 +297,32 @@ function PVP:sv_attack(params,caller)
                     self.sv.saved.playerStats[attacker.id].hp = math.min(math.max(attackerHP + 25, 0), maxHP)
                 end
             end
+            self.network:sendToClient(attacker,"playerHit",{victim=victim,damage=damage})
         end
     end
 end
 
-function PVP:sv_sendAttack(damage, attacker)
-    local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
-    if success then
+function PVP:sv_sendAttack(damage, attacker)if not attacker.character then return end 
+    local success, result = sm.physics.raycast( attacker.character.worldPosition, attacker.character:getDirection()*3.0 )
+    if success and result:getCharacter() then
         print(result)
         victim = result:getCharacter():getPlayer()
         sm.event.sendToTool(PVP.instance.tool, "sv_attack", {victim = victim, attacker = attacker, damage = damage, ignoreSound = true})
-        
-        self.network.sendToClient(attacker,"playerHit",{victim=victim,damage=damage})
     end
+end
+
+function PVP:playerHit(data, attacker)if attacker then return end
+    local victim = data.victim
+    local damage = data.damage
+    local visualDamage=(damage-math.floor(damage))*100
+    local color = hslToHex(math.random()*254,visualDamage,50+(100/math.floor(damage)))
+    local hex = "#" .. color.r .. color.g .. color.b
+    local gui = self.hitTag
+
+    gui:setWorldPosition(victim.character.worldPosition - (sm.vec3.one()/2) + sm.vec3.one()*(math.random()/2))
+    gui:setText("Text",hex .. tostring(math.floor(damage+0.5)))
+    gui:open()
+    self.playerHitTick = sm.game.getCurrentTick()
 end
 
 function PVP:client_onCreate()
@@ -327,6 +344,12 @@ function PVP:client_onCreate()
     self.cl.hud:setVisible("WaterBar", false)
     self.cl.hud:setVisible("BindingPanel", false)
     self.cl.hud:open()
+
+    self.hitTag = sm.gui.createNameTagGui()
+end
+
+function PVP:client_onRefresh()
+    self.hitTag = self.hitTag or sm.gui.createNameTagGui()
 end
 
 function PVP:client_onFixedUpdate()
@@ -387,19 +410,16 @@ function PVP:client_onFixedUpdate()
             local Range = 3.0
             local Damage = 20
 
-            -- local success, result = sm.localPlayer.getRaycast( Range, sm.localPlayer.getRaycastStart(), sm.localPlayer.getDirection() )
-            -- if success then
-            --     self.network:sendToServer("sv_sendAttack", {victim = result:getCharacter():getPlayer(), attacker = sm.localPlayer.getPlayer(), damage = Damage, ignoreSound = true})
-            --     if result.type == "character" and result:getCharacter():getPlayer() then
-                    
-            --     end
-            -- end
-
-            self.network:sendToServer("cl_sendAttack", Damage)
+            self.network:sendToServer("sv_sendAttack", Damage)
         end
     end
 
     self:cl_updateNameTags()
+
+    if self.playerHitTick and self.playerHitTick+10 < (sm.game.getCurrentTick()) then
+        self.hitTag:close()
+        self.playerHitTick=nil
+    end
 end
 
 function PVP:client_onUpdate()
@@ -491,7 +511,7 @@ function PVP:cl_msg(msg)
     sm.gui.chatMessage(msg)
 end
 
-function PVP:cl_sendAttack(damage)
+function PVP:cl_sendAttack(damage,a)print(a)
     self.network:sendToServer("sv_sendAttack", damage or 20)
 end
 
