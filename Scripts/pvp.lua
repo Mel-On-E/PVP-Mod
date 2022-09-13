@@ -250,7 +250,7 @@ end
 function PVP:client_onCreate()
     if not self.tool:isLocal() then return end
     g_cl_tool = self.tool
-    sm.gui.chatMessage("#ff0088Thanks for playing with the PVP mod! (0.9)" )
+    sm.gui.chatMessage("#ff0088Thanks for playing with the PVP mod! (1.01)" )
 
     self.cl = {}
     self.cl.pvp = true
